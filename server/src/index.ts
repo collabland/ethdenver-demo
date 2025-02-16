@@ -1,4 +1,4 @@
-import express, { NextFunction, Request, Response } from "express";
+import express, { Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import helloRouter from "./routes/hello.js";
@@ -14,6 +14,8 @@ import cookieParser from "cookie-parser";
 import githubRouter from "./routes/github.js";
 import { AnyType } from "./utils.js";
 import { isHttpError } from "http-errors";
+import { MineflayerService } from "./services/mineflayer.service.js";
+import minecraftRouter from "./routes/minecraft.js";
 
 // Convert ESM module URL to filesystem path
 const __filename = fileURLToPath(import.meta.url);
@@ -56,14 +58,22 @@ app.use("/auth/discord", discordRouter);
 // Mount GitHub OAuth routes
 app.use("/auth/github", githubRouter);
 
+// Mount Minecraft routes
+app.use("/minecraft", minecraftRouter);
+
+// Define a route for the root path
+app.get("/", (_req, res) => {
+  res.send("Hello from Express.js!");
+});
+
 // 404 handler
-app.use((_req: Request, _res: Response, _next: NextFunction) => {
+app.use((_req: Request, _res: Response) => {
   _res.status(404).json({
-    message: `Route ${_req.method} ${_req.url} not found`,
+    message: `Route not found`,
   });
 });
 
-app.use((_err: AnyType, _req: Request, _res: Response, _next: NextFunction) => {
+app.use((_err: AnyType, _req: Request, _res: Response) => {
   if (isHttpError(_err)) {
     _res.status(_err.statusCode).json({
       message: _err.message,
@@ -100,6 +110,11 @@ app.listen(port, async () => {
 
     const botInfo = await telegramService.getBotInfo();
     console.log("Telegram Bot URL:", `https://t.me/${botInfo.username}`);
+
+    // Initialize Mineflayer service
+    const mineflayerService = MineflayerService.getInstance();
+    await mineflayerService.start();
+    services.push(mineflayerService);
   } catch (e) {
     console.error("Failed to start server:", e);
     process.exit(1);

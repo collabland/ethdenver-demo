@@ -21,8 +21,8 @@
     "@grammyjs/conversations": "^1.2.0",
     "@ngrok/ngrok": "^1.4.1",
     "@solana/web3.js": "^1.98.0",
-    "agent-twitter-client": "^0.0.18",
     "@useorbis/db-sdk": "0.0.60-alpha",
+    "agent-twitter-client": "^0.0.18",
     "axios": "^1.7.7",
     "better-sqlite3": "^11.6.0",
     "cookie-parser": "^1.4.7",
@@ -33,6 +33,7 @@
     "grammy": "^1.32.0",
     "http-errors": "^2.0.0",
     "jsonc-parser": "^3.3.1",
+    "mineflayer": "^4.26.0",
     "node-cache": "^5.1.2",
     "prettier": "^3.4.2",
     "tsc-watch": "^6.2.1"
