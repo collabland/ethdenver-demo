@@ -1,11 +1,14 @@
 import mineflayer from "mineflayer";
 import { IService } from "./base.service.js";
+import pathfinder from "mineflayer-pathfinder";
+const { Movements, goals } = pathfinder;
 
 export class MineflayerService implements IService {
   private static instance: MineflayerService;
   private bot: mineflayer.Bot | null = null;
   private reconnectAttempts = 0;
   private readonly MAX_RECONNECT_ATTEMPTS = 3;
+  private lastPosition = { x: 0, y: 0, z: 0 };
 
   private constructor() {}
 
@@ -23,17 +26,20 @@ export class MineflayerService implements IService {
       const config = {
         host: process.env.MINECRAFT_HOST || "localhost",
         port: parseInt(process.env.MINECRAFT_PORT || "25565"),
-        username: process.env.MINECRAFT_USERNAME || "MineflyBot",
+        username: process.env.MINECRAFT_USERNAME || "StarterKitBot",
         version: process.env.MINECRAFT_VERSION || "1.21.4",
         auth: "offline" as const,
-        skipValidation: true,
-        checkTimeoutInterval: 60000, // Keep connection alive
-        closeTimeout: 240000, // Wait longer before closing connection
-        keepAlive: true, // Enable keep-alive packets
+        skipValidation: false,
+        checkTimeoutInterval: 60000,
+        closeTimeout: 240000,
+        keepAlive: true,
       };
 
       console.log("[Mineflayer] Connecting with config:", config);
       this.bot = mineflayer.createBot(config);
+
+      // Load pathfinder plugin
+      this.bot.loadPlugin(pathfinder.pathfinder);
 
       this.setupEventHandlers();
     } catch (error) {
@@ -45,13 +51,47 @@ export class MineflayerService implements IService {
   private setupEventHandlers() {
     if (!this.bot) return;
 
-    this.bot.on("spawn", () => {
-      console.log("[Mineflayer] Bot spawned in game");
-      this.reconnectAttempts = 0;
+    // Log bot position only when moving
+    setInterval(() => {
+      if (this.bot?.entity?.position) {
+        const pos = this.bot.entity.position;
+        const roundedPos = {
+          x: Math.round(pos.x * 100) / 100,
+          y: Math.round(pos.y * 100) / 100,
+          z: Math.round(pos.z * 100) / 100,
+        };
 
-      // Send a message when joining
-      this.bot?.chat("Hello! Bot connected successfully.");
+        if (
+          roundedPos.x !== this.lastPosition.x ||
+          roundedPos.y !== this.lastPosition.y ||
+          roundedPos.z !== this.lastPosition.z
+        ) {
+          console.log("[Mineflayer] Bot position:", roundedPos);
+          this.lastPosition = roundedPos;
+        }
+      }
+    }, 1000);
+
+    this.bot.once("spawn", () => {
+      // Initialize movements
+      if (this.bot) {
+        const movements = new Movements(this.bot);
+        this.bot.pathfinder.setMovements(movements);
+      }
     });
+
+    // Follow nearest player continuously
+    setInterval(() => {
+      if (!this.bot) return;
+
+      const playerEntity = this.bot.nearestEntity(
+        (entity) => entity.type === "player"
+      );
+      if (playerEntity) {
+        const goal = new goals.GoalFollow(playerEntity, 2); // Follow at 2 blocks distance
+        this.bot.pathfinder.setGoal(goal);
+      }
+    }, 1000);
 
     this.bot.on("login", () => {
       console.log("[Mineflayer] Bot logged in successfully");
