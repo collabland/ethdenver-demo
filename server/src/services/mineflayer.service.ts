@@ -3,6 +3,7 @@ import { IService } from "./base.service.js";
 import pathfinder from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
 import { plugin as collectBlock } from "mineflayer-collectblock";
+import { AnyType } from "src/utils.js";
 const { Movements, goals } = pathfinder;
 
 export class MineflayerService implements IService {
@@ -42,37 +43,46 @@ export class MineflayerService implements IService {
       console.log("[Mineflayer] Connecting with config:", config);
       this.bot = mineflayer.createBot(config);
 
-      // Load pathfinder plugin
+      console.log("[Mineflayer] Loading plugins...");
       this.bot.loadPlugin(pathfinder.pathfinder);
-
-      // Load collectblock plugin
       this.bot.loadPlugin(collectBlock);
 
       this.setupEventHandlers();
+      console.log("[Mineflayer] Bot initialization complete");
     } catch (error) {
       console.error("[Mineflayer] Failed to initialize bot:", error);
+      console.dir(error, { depth: null });
       throw error;
     }
   }
-
+  // dont change this _username to username
   private async harvestTree(_username: string, amount: number) {
     if (!this.bot) return;
 
     try {
-      // Check inventory first for any type of logs
+      const checkMessage = `Checking inventory for logs...`;
+      console.log(`[Mineflayer] ${checkMessage}`);
+      this.bot.chat(checkMessage);
+
       const existingLogs = this.bot.inventory
         .items()
         .filter((item) => item.name.includes("_log"))
         .reduce((total, item) => total + item.count, 0);
 
+      console.dir({ existingLogs, requiredAmount: amount }, { depth: null });
+
       if (existingLogs >= amount) {
-        this.bot.chat(`I already have ${existingLogs} logs, that's enough!`);
+        const enoughLogsMessage = `I already have ${existingLogs} logs, that's enough! 🪵`;
+        console.log(`[Mineflayer] ${enoughLogsMessage}`);
+        this.bot.chat(enoughLogsMessage);
         return;
       }
 
       const neededLogs = amount - existingLogs;
+      const searchMessage = `I need ${neededLogs} more logs. Looking for trees... 🔍`;
+      console.log(`[Mineflayer] ${searchMessage}`);
+      this.bot.chat(searchMessage);
 
-      // Find and harvest logs
       const logBlock = this.bot.findBlock({
         matching: (block) => block.name.includes("_log"),
         maxDistance: 64,
@@ -87,12 +97,24 @@ export class MineflayerService implements IService {
         },
       });
 
+      if (logBlock) {
+        console.dir(
+          { foundLogBlock: logBlock.name, position: logBlock.position },
+          { depth: 2 }
+        );
+      }
+
       if (!logBlock) {
-        this.bot.chat("No trees found nearby!");
+        const noTreesMessage = "No trees found within 64 blocks! 😢";
+        console.log(`[Mineflayer] ${noTreesMessage}`);
+        this.bot.chat(noTreesMessage);
         return;
       }
 
-      // Get all connected logs of the same type
+      const startChopMessage = `Found a ${logBlock.name.replace("_", " ")}! Starting to chop... 🪓`;
+      console.log(`[Mineflayer] ${startChopMessage}`);
+      this.bot.chat(startChopMessage);
+
       const treeBlocks = this.bot.findBlocks({
         matching: logBlock.type,
         maxDistance: 32,
@@ -100,45 +122,104 @@ export class MineflayerService implements IService {
         point: logBlock.position,
       });
 
-      // Collect logs using collectBlock plugin
       let collectedLogs = 0;
+      let lastPosition = this.bot.entity.position.clone();
+      let stuckCounter = 0;
+      const MAX_STUCK_TICKS = 100; // 5 seconds at 20 ticks/sec
+
       for (const pos of treeBlocks) {
         const block = this.bot.blockAt(pos);
         if (!block || block.type !== logBlock.type) continue;
 
         try {
+          // Check if we're stuck
+          const currentPos = this.bot.entity.position;
+          if (currentPos.distanceTo(lastPosition) < 0.1) {
+            stuckCounter++;
+            if (stuckCounter > MAX_STUCK_TICKS) {
+              const stuckMessage =
+                "I seem to be stuck! Moving to next tree... 🏃";
+              console.log(`[Mineflayer] ${stuckMessage}`);
+              console.dir(
+                {
+                  type: "stuck_detection",
+                  position: currentPos,
+                  lastPosition,
+                  stuckTicks: stuckCounter,
+                  targetBlock: pos,
+                },
+                { depth: null }
+              );
+              this.bot.chat(stuckMessage);
+
+              // Try to unstuck by stopping current action
+              (this.bot.collectBlock as AnyType).stop();
+              this.bot.setControlState("jump", false);
+              await this.bot.waitForTicks(10);
+
+              // Reset counter and update position
+              stuckCounter = 0;
+              lastPosition = currentPos.clone();
+              continue;
+            }
+          } else {
+            // Reset counter if we're moving
+            stuckCounter = 0;
+            lastPosition = currentPos.clone();
+          }
+
           await this.bot.collectBlock.collect(block);
           collectedLogs++;
-          console.log("[Mineflayer] Collected log", collectedLogs);
+          if (collectedLogs % 3 === 0) {
+            // Report progress every 3 logs
+            const message = `Chopped ${collectedLogs} logs so far... ⚡`;
+            console.log(`[Mineflayer] ${message}`);
+            this.bot.chat(message);
+          }
 
           // Stack logs after each collection
           const logs = this.bot.inventory
             .items()
             .filter((item) => item.name === logBlock.name);
           if (logs.length > 1) {
-            // Find the stack with the most space
+            const message = `Organizing inventory... 📦`;
+            console.log(`[Mineflayer] ${message}`);
+            this.bot.chat(message);
             const bestStack = logs.reduce((prev, current) =>
               64 - current.count > 64 - prev.count ? current : prev
             );
 
-            // Stack other logs into this stack
             for (const log of logs) {
               if (log !== bestStack) {
                 try {
                   await this.bot.moveSlotItem(log.slot, bestStack.slot);
                   await this.bot.waitForTicks(2);
                 } catch (err) {
-                  console.error("[Mineflayer] Failed to stack logs:", err);
+                  const message = `Oops, had trouble collecting that log... 😅`;
+                  console.error(`[Mineflayer] ${message}`, err);
+                  console.dir(err, { depth: null });
+                  this.bot.chat(message);
                 }
               }
             }
           }
 
-          // Check if we have enough logs
           const totalLogs = logs.reduce((sum, item) => sum + item.count, 0);
-          if (totalLogs >= amount) break;
+          if (totalLogs >= amount) {
+            const message = `Got all ${amount} logs! Mission accomplished! 🎉`;
+            console.log(`[Mineflayer] ${message}`);
+            this.bot.chat(message);
+            break;
+          }
         } catch (err) {
-          console.error("[Mineflayer] Failed to collect log:", err);
+          const errorMessage = `Oops, had trouble collecting that log... 😅`;
+          console.error(`[Mineflayer] ${errorMessage}`, err);
+          console.dir(err, { depth: null });
+          this.bot.chat(errorMessage);
+
+          // Reset stuck detection on error
+          stuckCounter = 0;
+          lastPosition = this.bot.entity.position.clone();
           continue;
         }
       }
@@ -148,10 +229,24 @@ export class MineflayerService implements IService {
         .filter((item) => item.name.includes("_log"))
         .reduce((total, item) => total + item.count, 0);
 
-      this.bot.chat(`Harvesting complete! I now have ${finalCount} logs 🪓`);
+      console.dir(
+        {
+          type: "harvest_complete",
+          finalCount,
+          originalRequest: amount,
+          collectedLogs,
+          position: this.bot.entity.position,
+        },
+        { depth: null }
+      );
+
+      const message = `All done! I now have ${finalCount} logs in total 🪵`;
+      console.log(`[Mineflayer] ${message}`);
+      this.bot.chat(message);
     } catch (error) {
       console.error("[Mineflayer] Error in tree harvesting:", error);
-      this.bot.chat("Failed to complete the harvesting task 😢");
+      console.dir(error, { depth: null });
+      this.bot.chat("Something went wrong while harvesting... 😢");
     }
   }
 
@@ -159,66 +254,77 @@ export class MineflayerService implements IService {
     if (!this.bot || size < 1) return;
 
     try {
-      // Get player position
       const player = this.bot.players[username];
       if (!player?.entity) {
-        this.bot.chat("I can't see you!");
+        const cantSeeMessage = "I can't see you! Where are you? 👀";
+        console.log(`[Mineflayer] ${cantSeeMessage}`);
+        this.bot.chat(cantSeeMessage);
         return;
       }
-      const playerPos = player.entity.position.clone();
+
+      const planningMessage = `Planning to build a ${size}x${size} platform... 🏗️`;
+      console.log(`[Mineflayer] ${planningMessage}`);
+      this.bot.chat(planningMessage);
 
       const requiredLogs = size * size;
+      console.dir(
+        {
+          platformSize: size,
+          requiredLogs,
+          playerPosition: player.entity.position,
+        },
+        { depth: null }
+      );
 
-      // Check inventory for logs
       const logs = this.bot.inventory
         .items()
         .filter((item) => item.name.includes("_log"));
-
       const totalLogs = logs.reduce((sum, item) => sum + item.count, 0);
 
       if (totalLogs < requiredLogs) {
-        this.bot.chat(
-          `Need ${requiredLogs} logs for ${size}x${size} platform, but only have ${totalLogs}!`
-        );
+        const notEnoughMessage = `I need ${requiredLogs} logs for a ${size}x${size} platform, but only have ${totalLogs}! Try !harvest ${requiredLogs} first! 🪵`;
+        console.log(`[Mineflayer] ${notEnoughMessage}`);
+        this.bot.chat(notEnoughMessage);
         return;
       }
 
-      // Find the stack with the most logs
-      const bestLogStack = logs.reduce((prev, current) =>
-        current.count > prev.count ? current : prev
-      );
-
-      // Equip the largest stack of logs
-      await this.bot.equip(bestLogStack, "hand");
-
-      // Move to starting position (3 blocks ahead)
+      const movingMessage = `I have enough logs! Moving into position... 🚶`;
+      console.log(`[Mineflayer] ${movingMessage}`);
+      this.bot.chat(movingMessage);
+      const playerPos = player.entity.position.clone();
       const buildPos = new Vec3(playerPos.x, playerPos.y, playerPos.z + 3);
 
       try {
         const goal = new goals.GoalNear(buildPos.x, buildPos.y, buildPos.z, 1);
         await this.bot.pathfinder.goto(goal);
+        const message = `In position! Starting to build... 🏗️`;
+        console.log(`[Mineflayer] ${message}`);
+        this.bot.chat(message);
       } catch (err) {
-        console.error("[Mineflayer] Failed to move to building position:", err);
-        this.bot.chat("Couldn't move to building position!");
+        const message =
+          "Can't reach the building position! Is the path blocked? 🚫";
+        console.log(`[Mineflayer] ${message}`);
+        this.bot.chat(message);
         return;
       }
 
-      // Calculate offsets for centered platform
       const offset = Math.floor(size / 2);
+      let blocksPlaced = 0;
+      const totalBlocks = size * size;
 
-      // Build platform moving backwards
       for (let z = size - 1; z >= 0; z--) {
         for (let x = -offset; x < size - offset; x++) {
-          // Check if we still have logs
           const currentLogs = this.bot.inventory
             .items()
             .find((item) => item.name.includes("_log"));
+
           if (!currentLogs) {
-            this.bot.chat("Ran out of logs!");
+            const message = "Uh oh, ran out of logs! 😱";
+            console.log(`[Mineflayer] ${message}`);
+            this.bot.chat(message);
             return;
           }
 
-          // Re-equip if needed
           if (!this.bot.heldItem || !this.bot.heldItem.name.includes("_log")) {
             await this.bot.equip(currentLogs, "hand");
           }
@@ -236,15 +342,26 @@ export class MineflayerService implements IService {
             const refBlock = this.bot.blockAt(blockPos.offset(0, 1, 0));
             if (!refBlock) continue;
 
-            // Check if block position is at bot's feet
             const botPos = this.bot.entity.position;
             const isBotPosition =
               Math.floor(botPos.x) === Math.floor(blockPos.x) &&
               Math.floor(botPos.z) === Math.floor(blockPos.z) &&
               Math.floor(botPos.y) === Math.floor(blockPos.y + 1);
 
+            console.dir(
+              {
+                action: "place_block",
+                botPosition: botPos,
+                targetPosition: blockPos,
+                isBotPosition,
+                blockType: currentLogs?.name,
+              },
+              { depth: null }
+            );
+
             if (isBotPosition) {
-              // Jump and wait a tick before placing
+              const message = "Need to jump to place this block! 🦘";
+              console.log(`[Mineflayer] ${message}`);
               this.bot.setControlState("jump", true);
               await this.bot.waitForTicks(1);
               await this.bot.lookAt(blockPos, true);
@@ -254,16 +371,36 @@ export class MineflayerService implements IService {
               await this.bot.lookAt(blockPos, true);
               await this.bot.placeBlock(refBlock, new Vec3(0, -1, 0));
             }
+
+            blocksPlaced++;
+            if (blocksPlaced % Math.ceil(totalBlocks / 4) === 0) {
+              // Progress update every 25%
+              const progress = Math.floor((blocksPlaced / totalBlocks) * 100);
+              const message = `Platform ${progress}% complete! 🏗️`;
+              console.log(`[Mineflayer] ${message}`);
+              console.dir(
+                {
+                  progress,
+                  blocksPlaced,
+                  totalBlocks,
+                  remainingLogs: this.bot.inventory
+                    .items()
+                    .filter((item) => item.name.includes("_log"))
+                    .reduce((sum, item) => sum + item.count, 0),
+                },
+                { depth: null }
+              );
+              this.bot.chat(message);
+            }
           } catch (err) {
-            console.error(
-              `[Mineflayer] Failed to place block at ${blockPos}:`,
-              err
-            );
+            const message = `Oops, couldn't place a block here... 😅`;
+            console.error(`[Mineflayer] ${message}`, err);
+            console.dir(err, { depth: null });
+            this.bot.chat(message);
             continue;
           }
         }
 
-        // Move back one block after each row
         if (z > 0) {
           const moveBackPos = new Vec3(
             buildPos.x,
@@ -278,35 +415,63 @@ export class MineflayerService implements IService {
               1
             );
             await this.bot.pathfinder.goto(goal);
+            const message = "Moving back for the next row... 🚶";
+            console.log(`[Mineflayer] ${message}`);
+            this.bot.chat(message);
           } catch (err) {
-            console.error("[Mineflayer] Failed to move back:", err);
+            const message = "Had trouble moving back... 😅";
+            console.log(`[Mineflayer] ${message}`);
+            this.bot.chat(message);
           }
         }
       }
 
-      this.bot.chat(`${size}x${size} platform built! 🌳`);
+      const completionMessage = `${size}x${size} platform complete! 🎉 Used ${blocksPlaced} logs!`;
+      console.log(`[Mineflayer] ${completionMessage}`);
+      console.dir(
+        {
+          type: "platform_complete",
+          size,
+          blocksPlaced,
+          remainingLogs: this.bot.inventory
+            .items()
+            .filter((item) => item.name.includes("_log"))
+            .reduce((sum, item) => sum + item.count, 0),
+          finalPosition: this.bot.entity.position,
+        },
+        { depth: null }
+      );
+      this.bot.chat(completionMessage);
     } catch (error) {
       console.error("[Mineflayer] Error in platform building:", error);
-      this.bot.chat("Failed to build the platform 😢");
+      console.dir(error, { depth: null });
+      this.bot.chat("Something went wrong while building... 😢");
     }
   }
 
   private async moveToPlayer(position: Vec3) {
     if (!this.bot) return;
+
+    console.log("[Mineflayer] Moving to position:", position);
     const goal = new goals.GoalNear(position.x, position.y, position.z, 1);
+
     try {
       await this.bot.pathfinder.goto(goal);
-      this.bot.chat("Here I am!");
+      const message = "Here I am!";
+      console.log("[Mineflayer] Reached target position");
+      this.bot.chat(message);
     } catch (err) {
-      this.bot.chat("I can't find a path to you!");
+      const message = "I can't find a path to you!";
+      console.error("[Mineflayer] Pathfinding failed:", err);
+      console.dir(err, { depth: null });
+      this.bot.chat(message);
     }
-    return;
   }
 
   private setupEventHandlers() {
     if (!this.bot) return;
 
-    // Log bot position only when moving
+    // Position logging
     setInterval(() => {
       if (this.bot?.entity?.position) {
         const pos = this.bot.entity.position;
@@ -321,7 +486,19 @@ export class MineflayerService implements IService {
           roundedPos.y !== this.lastPosition.y ||
           roundedPos.z !== this.lastPosition.z
         ) {
-          console.log("[Mineflayer] Bot position:", roundedPos);
+          console.log("[Mineflayer] Bot position updated:", roundedPos);
+          console.dir(
+            {
+              oldPosition: this.lastPosition,
+              newPosition: roundedPos,
+              movement: {
+                dx: roundedPos.x - this.lastPosition.x,
+                dy: roundedPos.y - this.lastPosition.y,
+                dz: roundedPos.z - this.lastPosition.z,
+              },
+            },
+            { depth: null }
+          );
           this.lastPosition = roundedPos;
         }
       }
@@ -330,46 +507,76 @@ export class MineflayerService implements IService {
     this.bot.once("spawn", () => {
       if (!this.bot) return;
       console.log("[Mineflayer] Bot spawned");
+      console.dir(
+        {
+          position: this.bot.entity.position,
+          health: this.bot.health,
+          food: this.bot.food,
+          gameMode: this.bot.game.gameMode,
+        },
+        { depth: null }
+      );
+
       this.bot.chat("GM, just spawned!");
 
       // Set up initial game rules
+      console.log("[Mineflayer] Setting up game rules...");
       this.bot.chat("/time set day");
       this.bot.chat("/gamerule doDaylightCycle false");
       this.bot.chat("/difficulty peaceful");
 
       const defaultMove = new Movements(this.bot);
       this.bot.pathfinder.setMovements(defaultMove);
+      console.log("[Mineflayer] Initial setup complete");
     });
 
     this.bot.on("chat", async (username, message) => {
       if (!this.bot) return;
       if (username === this.bot.username) return;
 
+      console.log("[Mineflayer] Chat received:", { username, message });
+
       const harvestMatch = message.match(/^!harvest\s+(\d+)$/);
       const platformMatch = message.match(/^!platform\s+(\d+)$/);
 
       if (harvestMatch) {
         const amount = parseInt(harvestMatch[1]);
+        console.log("[Mineflayer] Harvest command received:", { amount });
         if (amount > 0) {
           await this.harvestTree(username, amount);
         } else {
-          this.bot.chat("Please specify a valid number of logs to harvest!");
+          const message = "Please specify a valid number of logs to harvest!";
+          console.log("[Mineflayer] Invalid harvest amount");
+          this.bot.chat(message);
         }
       } else if (platformMatch) {
         const size = parseInt(platformMatch[1]);
+        console.log("[Mineflayer] Platform command received:", { size });
         if (size > 0) {
           await this.buildPlatform(username, size);
         } else {
-          this.bot.chat("Please specify a valid platform size!");
+          const message = "Please specify a valid platform size!";
+          console.log("[Mineflayer] Invalid platform size");
+          this.bot.chat(message);
         }
       } else if (message === "!come") {
-        if (!this.bot) return;
+        console.log("[Mineflayer] Come command received from:", username);
         const player = this.bot.players[username];
         if (!player?.entity) {
-          this.bot.chat("I can't see you!");
+          const message = "I can't see you!";
+          console.log("[Mineflayer] Player not found:", username);
+          this.bot.chat(message);
           return;
         }
-
+        console.dir(
+          {
+            command: "come",
+            player: username,
+            targetPosition: player.entity.position,
+            botPosition: this.bot.entity.position,
+          },
+          { depth: null }
+        );
         await this.moveToPlayer(player.entity.position);
       } else if (message === "!follow") {
         await this.startFollowing(username);
@@ -380,16 +587,32 @@ export class MineflayerService implements IService {
 
     this.bot.on("login", () => {
       console.log("[Mineflayer] Bot logged in successfully");
+      console.dir(
+        {
+          username: this.bot?.username,
+          version: this.bot?.version,
+          connected: true,
+          gameMode: this.bot?.game.gameMode,
+        },
+        { depth: null }
+      );
     });
 
     this.bot.on("end", (reason: string) => {
       console.log("[Mineflayer] Bot connection ended:", reason);
+      console.dir(
+        {
+          reason,
+          reconnectAttempts: this.reconnectAttempts,
+          maxAttempts: this.MAX_RECONNECT_ATTEMPTS,
+        },
+        { depth: null }
+      );
       this.bot = null;
 
-      // Try to reconnect on unexpected disconnection
       if (this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
         console.log(
-          `[Mineflayer] Connection ended, attempting to reconnect...`
+          `[Mineflayer] Attempting reconnect ${this.reconnectAttempts + 1}/${this.MAX_RECONNECT_ATTEMPTS}`
         );
         this.reconnectAttempts++;
         setTimeout(() => this.init(), 5000);
@@ -398,32 +621,38 @@ export class MineflayerService implements IService {
 
     this.bot.on("error", (error) => {
       console.error("[Mineflayer] Bot error:", error);
-      if (this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
-        console.log(
-          `[Mineflayer] Attempting to reconnect (${this.reconnectAttempts + 1}/${this.MAX_RECONNECT_ATTEMPTS})...`
-        );
-        this.reconnectAttempts++;
-        setTimeout(() => this.init(), 5000);
-      } else {
-        console.error("[Mineflayer] Max reconnection attempts reached");
-      }
+      console.dir(error, { depth: null });
+    });
+
+    // Additional event handlers
+    this.bot.on("health", () => {
+      console.log("[Mineflayer] Health updated:", {
+        health: this.bot?.health,
+        food: this.bot?.food,
+      });
+    });
+
+    this.bot.on("death", () => {
+      console.log("[Mineflayer] Bot died", {
+        position: this.bot?.entity.position,
+        lastPosition: this.lastPosition,
+      });
+      this.bot?.chat("Oops, I died! 💀");
     });
 
     this.bot.on("kicked", (reason: string) => {
       console.log("[Mineflayer] Bot was kicked:", reason);
-      try {
-        const reasonJson = JSON.parse(reason);
-        console.log("[Mineflayer] Kick reason:", reasonJson);
-      } catch (e) {
-        console.log("[Mineflayer] Could not parse kick reason");
-      }
+      console.dir({ reason }, { depth: null });
     });
 
-    // Add health monitoring
-    this.bot.on("health", () => {
-      console.log(
-        `[Mineflayer] Bot health: ${this.bot?.health}, food: ${this.bot?.food}`
-      );
+    this.bot.on("blockUpdate", (oldBlock, newBlock) => {
+      if (oldBlock?.type !== newBlock?.type) {
+        console.log("[Mineflayer] Block updated:", {
+          oldType: oldBlock?.type,
+          newType: newBlock?.type,
+          position: newBlock?.position,
+        });
+      }
     });
   }
 
