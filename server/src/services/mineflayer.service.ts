@@ -10,7 +10,7 @@ export class MineflayerService implements IService {
   private static instance: MineflayerService;
   private bot: mineflayer.Bot | null = null;
   private reconnectAttempts = 0;
-  private readonly MAX_RECONNECT_ATTEMPTS = 3;
+  private readonly MAX_RECONNECT_ATTEMPTS = 10;
   private lastPosition = { x: 0, y: 0, z: 0 };
   private isFollowing = false;
   private followInterval: NodeJS.Timeout | null = null;
@@ -519,11 +519,32 @@ export class MineflayerService implements IService {
 
       this.bot.chat("GM, just spawned!");
 
-      // Set up initial game rules
+      // Set up initial game rules with checks
       console.log("[Mineflayer] Setting up game rules...");
-      this.bot.chat("/time set day");
-      this.bot.chat("/gamerule doDaylightCycle false");
-      this.bot.chat("/difficulty peaceful");
+
+      // Check if it's already daytime before setting time
+      if (this.bot.time.timeOfDay >= 13000 || this.bot.time.timeOfDay < 1000) {
+        console.log("[Mineflayer] Setting time to day");
+        this.bot.chat("/time set day");
+      } else {
+        console.log("[Mineflayer] Already daytime, skipping time set");
+      }
+
+      // Check daylight cycle before changing it
+      if (this.bot.time.doDaylightCycle) {
+        console.log("[Mineflayer] Disabling daylight cycle");
+        this.bot.chat("/gamerule doDaylightCycle false");
+      } else {
+        console.log("[Mineflayer] Daylight cycle already disabled");
+      }
+
+      // Check difficulty before changing it
+      if (this.bot.game.difficulty !== "peaceful") {
+        console.log("[Mineflayer] Setting difficulty to peaceful");
+        this.bot.chat("/difficulty peaceful");
+      } else {
+        console.log("[Mineflayer] Difficulty already set to peaceful");
+      }
 
       const defaultMove = new Movements(this.bot);
       this.bot.pathfinder.setMovements(defaultMove);
@@ -536,8 +557,27 @@ export class MineflayerService implements IService {
 
       console.log("[Mineflayer] Chat received:", { username, message });
 
-      const harvestMatch = message.match(/^!harvest\s+(\d+)$/);
-      const platformMatch = message.match(/^!platform\s+(\d+)$/);
+      // Check if message starts with @botUsername or just username
+      const botTag = `@${this.bot.username}`;
+      const botName = this.bot.username;
+      const lowerMessage = message.toLowerCase();
+      const lowerBotTag = botTag.toLowerCase();
+      const lowerBotName = botName.toLowerCase();
+
+      if (
+        !lowerMessage.startsWith(lowerBotTag) &&
+        !lowerMessage.startsWith(lowerBotName)
+      ) {
+        return;
+      }
+
+      // Remove the correct prefix based on which one was used
+      const command = lowerMessage.startsWith(lowerBotTag)
+        ? message.slice(botTag.length).trim()
+        : message.slice(botName.length).trim();
+
+      const harvestMatch = command.match(/^!harvest\s+(\d+)$/);
+      const platformMatch = command.match(/^!platform\s+(\d+)$/);
 
       if (harvestMatch) {
         const amount = parseInt(harvestMatch[1]);
@@ -559,7 +599,7 @@ export class MineflayerService implements IService {
           console.log("[Mineflayer] Invalid platform size");
           this.bot.chat(message);
         }
-      } else if (message === "!come") {
+      } else if (command === "!come") {
         console.log("[Mineflayer] Come command received from:", username);
         const player = this.bot.players[username];
         if (!player?.entity) {
@@ -578,11 +618,11 @@ export class MineflayerService implements IService {
           { depth: null }
         );
         await this.moveToPlayer(player.entity.position);
-      } else if (message === "!follow") {
+      } else if (command === "!follow") {
         await this.startFollowing(username);
-      } else if (message === "!stopfollow") {
+      } else if (command === "!stopfollow") {
         this.stopFollowing();
-      } else if (message === "!throw") {
+      } else if (command === "!throw") {
         await this.throwLogs(username);
       }
     });
@@ -617,7 +657,10 @@ export class MineflayerService implements IService {
           `[Mineflayer] Attempting reconnect ${this.reconnectAttempts + 1}/${this.MAX_RECONNECT_ATTEMPTS}`
         );
         this.reconnectAttempts++;
-        setTimeout(() => this.init(), 5000);
+        setTimeout(
+          () => this.init(),
+          Math.pow(2, this.reconnectAttempts) * 1000
+        );
       }
     });
 
@@ -722,16 +765,26 @@ export class MineflayerService implements IService {
       return;
     }
 
-    // Move to player first
+    // Move closer to player (1.5 blocks away instead of 2)
     try {
       const goal = new goals.GoalNear(
         player.position.x,
         player.position.y,
         player.position.z,
-        2
+        1.5
       );
       await this.bot.pathfinder.goto(goal);
-      await this.bot.lookAt(player.position);
+
+      // Look slightly above player's feet instead of eyes
+      const throwPosition = player.position.offset(0, 0.5, 0);
+      await this.bot.lookAt(throwPosition);
+
+      console.log("[Mineflayer] Aiming at player:", {
+        playerPosition: player.position,
+        throwPosition,
+        throwAngle: this.bot.entity.pitch,
+        direction: this.bot.entity.yaw,
+      });
     } catch (err) {
       console.error("[Mineflayer] Failed to reach player:", err);
       this.bot.chat("I can't reach you! 😢");
@@ -751,6 +804,7 @@ export class MineflayerService implements IService {
       `Throwing ${count} logs at x:${roundedPos.x} y:${roundedPos.y} z:${roundedPos.z}! 🎯`
     );
 
+    // Add small delay between throws to prevent items from stacking
     for (const log of logs) {
       try {
         await this.bot.tossStack(log);
@@ -765,6 +819,16 @@ export class MineflayerService implements IService {
 
   getBot() {
     return this.bot;
+  }
+
+  async getBotInfo() {
+    return {
+      username: this.bot?.username,
+      version: this.bot?.version,
+      connected: true,
+      gameMode: this.bot?.game?.gameMode,
+      position: this.bot?.entity?.position,
+    };
   }
 
   async shutdown() {
