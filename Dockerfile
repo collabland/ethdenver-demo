@@ -30,13 +30,7 @@ RUN cd server && pnpm run build
 
 # Create a proper start script file that ensures unique credentials per container
 RUN printf '#!/bin/sh\n\
-  # Ensure we have a clean start with no shared credentials\n\
-  if [ -f /app/server/data/nevermined-credentials.json ]; then\n\
-  echo "Removing existing credentials file to ensure unique DIDs"\n\
-  rm -f /app/server/data/nevermined-credentials.json\n\
-  fi\n\
-  \n\
-  # Start the server which will generate new credentials\n\
+  # Start the server which will generate new credentials if needed\n\
   cd /app/server && node dist/index.js\n' > /app/start.sh
 
 # Make the script executable

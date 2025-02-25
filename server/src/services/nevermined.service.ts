@@ -108,7 +108,7 @@ export class NeverminedService extends BaseService {
       throw new Error("NeverminedService not started");
     }
 
-    // First check if we have a DID in the data directory
+    // Check if we have a DID in the data directory for this bot
     const loadedDIDs = await this.loadDIDsFromFile();
     if (loadedDIDs && loadedDIDs.paymentPlanDID) {
       this.paymentPlanDID = loadedDIDs.paymentPlanDID;
@@ -117,16 +117,6 @@ export class NeverminedService extends BaseService {
         this.paymentPlanDID
       );
       return this.paymentPlanDID;
-    }
-
-    // Then check environment variable
-    if (process.env.NEVERMINED_PAYMENT_PLAN_DID) {
-      this.paymentPlanDID = process.env.NEVERMINED_PAYMENT_PLAN_DID;
-      console.log(
-        "[NeverminedService] Using payment plan DID from env:",
-        this.paymentPlanDID
-      );
-      return process.env.NEVERMINED_PAYMENT_PLAN_DID;
     }
 
     // Create a new payment plan with a unique name based on bot username and timestamp
@@ -147,7 +137,7 @@ export class NeverminedService extends BaseService {
       console.log("[NeverminedService] Payment plan created:", paymentPlan);
       this.paymentPlanDID = paymentPlan.did;
 
-      // Save to data file but don't modify .env
+      // Save to data file
       await this.saveDIDsToFile();
 
       return this.paymentPlanDID!;
@@ -162,7 +152,7 @@ export class NeverminedService extends BaseService {
       throw new Error("NeverminedService not started");
     }
 
-    // First check if we have a DID in the data directory
+    // Check if we have a DID in the data directory for this bot
     const loadedDIDs = await this.loadDIDsFromFile();
     if (loadedDIDs && loadedDIDs.agentDID) {
       this.agentDID = loadedDIDs.agentDID;
@@ -171,16 +161,6 @@ export class NeverminedService extends BaseService {
         this.agentDID
       );
       return this.agentDID;
-    }
-
-    // Then check environment variable
-    if (process.env.NEVERMINED_AGENT_DID) {
-      this.agentDID = process.env.NEVERMINED_AGENT_DID;
-      console.log(
-        "[NeverminedService] Using agent DID from env:",
-        this.agentDID
-      );
-      return process.env.NEVERMINED_AGENT_DID;
     }
 
     // Create a new agent with a unique name
@@ -200,7 +180,7 @@ export class NeverminedService extends BaseService {
       console.log("[NeverminedService] Agent created:", agent);
       this.agentDID = agent.did;
 
-      // Save to data file but don't modify .env
+      // Save to data file
       await this.saveDIDsToFile();
 
       return this.agentDID!;
@@ -429,17 +409,40 @@ export class NeverminedService extends BaseService {
     try {
       const dataDir = path.resolve(process.cwd(), "data");
       await fs.mkdir(dataDir, { recursive: true });
-
       const filePath = path.join(dataDir, "nevermined-credentials.json");
+
+      // Get bot username to use as key
+      const botInfo = await this.mineflayerService?.getBotInfo();
+      const botUsername = botInfo?.username ?? "unknown";
+
+      // Try to read existing file first
+      let existingData: Record<
+        string,
+        { agentDID: string; paymentPlanDID: string; role: string }
+      > = {};
+      try {
+        const existingContent = await fs.readFile(filePath, "utf8");
+        existingData = JSON.parse(existingContent);
+      } catch (error) {
+        // File doesn't exist or is invalid, start with empty object
+      }
+
+      // Update with this bot's DIDs
+      existingData[botUsername] = {
+        agentDID: this.agentDID!,
+        paymentPlanDID: this.paymentPlanDID!,
+        role: botInfo?.role ?? "merchant",
+      };
+
+      // Write back to file
       await fs.writeFile(
         filePath,
-        JSON.stringify({
-          agentDID: this.agentDID,
-          paymentPlanDID: this.paymentPlanDID,
-        }),
+        JSON.stringify(existingData, null, 2),
         "utf8"
       );
-      console.log(`[NeverminedService] Saved DIDs to ${filePath}`);
+      console.log(
+        `[NeverminedService] Saved DIDs for ${botUsername} to ${filePath}`
+      );
     } catch (error) {
       console.error("[NeverminedService] Error saving DIDs to file:", error);
     }
@@ -454,6 +457,13 @@ export class NeverminedService extends BaseService {
       console.log("[NeverminedService] Data directory:", dataDir);
       const filePath = path.join(dataDir, "nevermined-credentials.json");
 
+      // Get bot username to use as key
+      const botInfo = await this.mineflayerService?.getBotInfo();
+      const botUsername = botInfo?.username ?? "unknown";
+      console.log(
+        `[NeverminedService] Looking for DIDs for bot: ${botUsername}`
+      );
+
       // Check if file exists
       try {
         await fs.access(filePath);
@@ -464,18 +474,19 @@ export class NeverminedService extends BaseService {
 
       // Read and parse file
       const fileContent = await fs.readFile(filePath, "utf8");
-      const data = JSON.parse(fileContent);
+      const allData = JSON.parse(fileContent);
 
-      if (!data.agentDID || !data.paymentPlanDID) {
-        console.log(
-          "[NeverminedService] DIDs file exists but is missing required data"
-        );
+      // Get this bot's DIDs
+      const botData = allData[botUsername];
+      if (!botData || !botData.agentDID || !botData.paymentPlanDID) {
+        console.log(`[NeverminedService] No DIDs found for bot ${botUsername}`);
         return null;
       }
 
+      console.log(`[NeverminedService] Found DIDs for bot ${botUsername}`);
       return {
-        agentDID: data.agentDID,
-        paymentPlanDID: data.paymentPlanDID,
+        agentDID: botData.agentDID,
+        paymentPlanDID: botData.paymentPlanDID,
       };
     } catch (error) {
       console.error("[NeverminedService] Error loading DIDs from file:", error);

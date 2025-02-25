@@ -13,10 +13,11 @@ services:
       - MINECRAFT_USERNAME=BobBot
       # For Linux, use the special Docker DNS name
       - MINECRAFT_HOST=host.docker.internal
+      - MINECRAFT_ROLE=builder
     ports:
       - "3001:3001"
     volumes:
-      - bob_data:/app/server/data
+      - shared_data:/app/server/data
     networks:
       - minecraft-network
     # For Linux, add this to make host.docker.internal work
@@ -37,10 +38,11 @@ services:
       - MINECRAFT_USERNAME=AliceBot
       # For Linux, use the special Docker DNS name
       - MINECRAFT_HOST=host.docker.internal
+      - MINECRAFT_ROLE=merchant
     ports:
       - "3002:3002"
     volumes:
-      - alice_data:/app/server/data
+      - shared_data:/app/server/data
     networks:
       - minecraft-network
     # For Linux, add this to make host.docker.internal work
@@ -48,10 +50,7 @@ services:
       - "host.docker.internal:host-gateway"
 
 volumes:
-  bob_data:
-  bob_credentials:
-  alice_data:
-  alice_credentials:
+  shared_data:
 
 networks:
   minecraft-network:

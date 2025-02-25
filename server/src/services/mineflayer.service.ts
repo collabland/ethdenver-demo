@@ -14,6 +14,7 @@ export class MineflayerService implements IService {
   private lastPosition = { x: 0, y: 0, z: 0 };
   private isFollowing = false;
   private followInterval: NodeJS.Timeout | null = null;
+  private role: string | null = null;
 
   private constructor() {}
 
@@ -46,7 +47,7 @@ export class MineflayerService implements IService {
       console.log("[Mineflayer] Loading plugins...");
       this.bot.loadPlugin(pathfinder.pathfinder);
       this.bot.loadPlugin(collectBlock);
-
+      this.role = process.env.MINECRAFT_ROLE || "builder";
       this.setupEventHandlers();
       console.log("[Mineflayer] Bot initialization complete");
     } catch (error) {
@@ -517,7 +518,7 @@ export class MineflayerService implements IService {
         { depth: null }
       );
 
-      this.bot.chat("GM, just spawned!");
+      this.bot.chat(`GM, just spawned! Role selected: ${this.role}`);
 
       // Set up initial game rules with checks
       console.log("[Mineflayer] Setting up game rules...");
@@ -581,7 +582,13 @@ export class MineflayerService implements IService {
 
       if (harvestMatch) {
         const amount = parseInt(harvestMatch[1]);
-        console.log("[Mineflayer] Harvest command received:", { amount });
+        console.log("[Mineflayer] Harvest command received:", {
+          amount,
+          username,
+        });
+        this.bot.chat(
+          `Harvest command received from ${username} for ${amount} logs...`
+        );
         if (amount > 0) {
           await this.harvestTree(username, amount);
         } else {
@@ -591,7 +598,13 @@ export class MineflayerService implements IService {
         }
       } else if (platformMatch) {
         const size = parseInt(platformMatch[1]);
-        console.log("[Mineflayer] Platform command received:", { size });
+        console.log("[Mineflayer] Platform command received:", {
+          size,
+          username,
+        });
+        this.bot.chat(
+          `Platform command received from ${username} for ${size}x${size} platform...`
+        );
         if (size > 0) {
           await this.buildPlatform(username, size);
         } else {
@@ -601,6 +614,7 @@ export class MineflayerService implements IService {
         }
       } else if (command === "!come") {
         console.log("[Mineflayer] Come command received from:", username);
+        this.bot.chat(`Come command received from ${username}...`);
         const player = this.bot.players[username];
         if (!player?.entity) {
           const message = "I can't see you!";
@@ -619,10 +633,19 @@ export class MineflayerService implements IService {
         );
         await this.moveToPlayer(player.entity.position);
       } else if (command === "!follow") {
+        console.log("[Mineflayer] Follow command received from:", username);
+        this.bot.chat(`Follow command received from ${username}...`);
         await this.startFollowing(username);
       } else if (command === "!stopfollow") {
+        console.log(
+          "[Mineflayer] Stop follow command received from:",
+          username
+        );
+        this.bot.chat(`Stop follow command received from ${username}...`);
         this.stopFollowing();
       } else if (command === "!throw") {
+        console.log("[Mineflayer] Throw command received from:", username);
+        this.bot.chat(`Throw command received from ${username}...`);
         await this.throwLogs(username);
       }
     });
@@ -690,15 +713,15 @@ export class MineflayerService implements IService {
       console.dir({ reason }, { depth: null });
     });
 
-    this.bot.on("blockUpdate", (oldBlock, newBlock) => {
-      if (oldBlock?.type !== newBlock?.type) {
-        console.log("[Mineflayer] Block updated:", {
-          oldType: oldBlock?.type,
-          newType: newBlock?.type,
-          position: newBlock?.position,
-        });
-      }
-    });
+    // this.bot.on("blockUpdate", (oldBlock, newBlock) => {
+    //   if (oldBlock?.type !== newBlock?.type) {
+    //     console.log("[Mineflayer] Block updated:", {
+    //       oldType: oldBlock?.type,
+    //       newType: newBlock?.type,
+    //       position: newBlock?.position,
+    //     });
+    //   }
+    // });
   }
 
   private async startFollowing(username: string) {
@@ -828,6 +851,7 @@ export class MineflayerService implements IService {
       connected: true,
       gameMode: this.bot?.game?.gameMode,
       position: this.bot?.entity?.position,
+      role: this.role,
     };
   }
 
