@@ -582,6 +582,8 @@ export class MineflayerService implements IService {
         await this.startFollowing(username);
       } else if (message === "!stopfollow") {
         this.stopFollowing();
+      } else if (message === "!throw") {
+        await this.throwLogs(username);
       }
     });
 
@@ -701,6 +703,64 @@ export class MineflayerService implements IService {
     }
     this.bot.pathfinder.setGoal(null);
     this.bot.chat("Stopped following!");
+  }
+
+  private async throwLogs(username: string) {
+    if (!this.bot) return;
+
+    const logs = this.bot.inventory
+      .items()
+      .filter((item) => item.name.includes("_log"));
+    if (logs.length === 0) {
+      this.bot.chat("I don't have any logs to throw! 🤷");
+      return;
+    }
+
+    const player = this.bot.players[username]?.entity;
+    if (!player) {
+      this.bot.chat("I can't see you! Come closer! 👀");
+      return;
+    }
+
+    // Move to player first
+    try {
+      const goal = new goals.GoalNear(
+        player.position.x,
+        player.position.y,
+        player.position.z,
+        2
+      );
+      await this.bot.pathfinder.goto(goal);
+      await this.bot.lookAt(player.position);
+    } catch (err) {
+      console.error("[Mineflayer] Failed to reach player:", err);
+      this.bot.chat("I can't reach you! 😢");
+      return;
+    }
+
+    const count = logs.reduce((sum, item) => sum + item.count, 0);
+    const position = this.bot.entity.position;
+    const roundedPos = {
+      x: Math.round(position.x * 10) / 10,
+      y: Math.round(position.y * 10) / 10,
+      z: Math.round(position.z * 10) / 10,
+    };
+
+    console.log("[Mineflayer] Throwing logs:", { count, position: roundedPos });
+    this.bot.chat(
+      `Throwing ${count} logs at x:${roundedPos.x} y:${roundedPos.y} z:${roundedPos.z}! 🎯`
+    );
+
+    for (const log of logs) {
+      try {
+        await this.bot.tossStack(log);
+        await this.bot.waitForTicks(2);
+      } catch (err) {
+        console.error("[Mineflayer] Error throwing item:", err);
+      }
+    }
+
+    this.bot.chat("All logs thrown! 🎊");
   }
 
   getBot() {
