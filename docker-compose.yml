@@ -1,0 +1,58 @@
+services:
+  minecraft-bot-bob:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: minecraft-bot-bob
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - MINECRAFT_USERNAME=BobBot
+      # For Linux, use the special Docker DNS name
+      - MINECRAFT_HOST=host.docker.internal
+    ports:
+      - "3001:3001"
+    volumes:
+      - bob_data:/app/server/data
+    networks:
+      - minecraft-network
+    # For Linux, add this to make host.docker.internal work
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  minecraft-bot-alice:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: minecraft-bot-alice
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - MINECRAFT_USERNAME=AliceBot
+      # For Linux, use the special Docker DNS name
+      - MINECRAFT_HOST=host.docker.internal
+    ports:
+      - "3002:3002"
+    volumes:
+      - alice_data:/app/server/data
+    networks:
+      - minecraft-network
+    # For Linux, add this to make host.docker.internal work
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  bob_data:
+  bob_credentials:
+  alice_data:
+  alice_credentials:
+
+networks:
+  minecraft-network:
+    driver: bridge 

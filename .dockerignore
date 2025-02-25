@@ -50,6 +50,9 @@ next-env.d.ts
 dist
 pnpm-lock.yaml
 *.sqlite
+eliza.sqlite
+**/eliza.sqlite
+server/eliza.sqlite
 
 # token metadata
 token.jsonc
