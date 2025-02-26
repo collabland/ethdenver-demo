@@ -7,6 +7,7 @@ import { AnyType } from "src/utils.js";
 import { NeverminedService } from "./nevermined.service.js";
 import path from "path";
 import fs from "fs/promises";
+import { AgentExecutionStatus } from "@nevermined-io/payments";
 
 const { Movements, goals } = pathfinder;
 
@@ -148,7 +149,7 @@ export class MineflayerService implements IService {
   }
 
   // dont change this _username to username
-  private async harvestTree(_username: string, amount: number) {
+  public async harvestTree(_username: string, amount: number) {
     if (!this.bot) return;
 
     try {
@@ -247,7 +248,7 @@ export class MineflayerService implements IService {
               // Try to unstuck by stopping current action
               (this.bot.collectBlock as AnyType).stop();
               this.bot.setControlState("jump", false);
-              await this.bot.waitForTicks(10);
+              await this.bot.waitForTicks(1);
 
               // Reset counter and update position
               stuckCounter = 0;
@@ -285,7 +286,7 @@ export class MineflayerService implements IService {
               if (log !== bestStack) {
                 try {
                   await this.bot.moveSlotItem(log.slot, bestStack.slot);
-                  await this.bot.waitForTicks(2);
+                  await this.bot.waitForTicks(1);
                 } catch (err) {
                   const message = `Oops, had trouble collecting that log... 😅`;
                   console.error(`[Mineflayer] ${message}`, err);
@@ -342,7 +343,7 @@ export class MineflayerService implements IService {
     }
   }
 
-  private async buildPlatform(username: string, size: number) {
+  public async buildPlatform(username: string, size: number) {
     if (!this.bot || size <= 1) return;
     const neverminedService = await NeverminedService.getInstance();
     try {
@@ -396,6 +397,9 @@ export class MineflayerService implements IService {
         this.bot.chat(
           `${nearestMerchant.username} Agent DID: ${merchantDID}\n${nearestMerchant.username} Payment Plan DID: ${merchantPaymentPlanDID}`
         );
+        this.bot.chat(
+          `checking plan balance for @${nearestMerchant.username}...`
+        );
         const { agreementId, balance } =
           await neverminedService.getPlanCreditBalance(merchantPaymentPlanDID);
         if (agreementId) {
@@ -410,11 +414,21 @@ export class MineflayerService implements IService {
           `!harvest ${requiredLogs - totalLogs}`,
           async (data: string) => {
             const parsedData = JSON.parse(data);
-            console.log("[Mineflayer] Harvest task completed:", parsedData);
+            console.log("[Mineflayer] Harvest task updated:", parsedData);
             this.bot?.chat(
-              `Harvest task completed by ${nearestMerchant.username}, result: ${parsedData}`
+              `Harvest task status updated by @${nearestMerchant.username}, result: ${data}`
             );
-            this.bot?.chat(`@${nearestMerchant.username} !throw`);
+            if (parsedData.task_status === AgentExecutionStatus.Completed) {
+              this.bot?.chat(`@${nearestMerchant.username} !throw`);
+            } else if (parsedData.task_status === AgentExecutionStatus.Failed) {
+              this.bot?.chat(
+                `Error harvesting logs from @${nearestMerchant.username}, trying again...`
+              );
+            } else {
+              this.bot?.chat(
+                `Waiting for @${nearestMerchant.username} to collect logs...`
+              );
+            }
           }
         );
         console.log("[Mineflayer] Harvest task submitted:", task);
@@ -422,6 +436,37 @@ export class MineflayerService implements IService {
           `Harvest task submitted to ${nearestMerchant.username}: Task ID: ${task?.task?.task_id}`
         );
         return;
+      }
+      this.bot.chat("Waiting for logs to be dropped...");
+      // wait for the merchant to arrive
+      await this.bot.waitForTicks(1);
+      this.bot.chat("Collecting logs...");
+      //collect the nearest log dropped items
+      const droppedLogs = this.bot.findBlocks({
+        matching: (block) => {
+          const drops = Object.values(this.bot?.entities ?? {}).filter(
+            (e) =>
+              e?.type === "object" &&
+              e?.objectType === "Item" &&
+              e?.position?.distanceTo(block.position) < 10
+          );
+          return drops.length > 0;
+        },
+        count: requiredLogs,
+        maxDistance: 5,
+      });
+      if (droppedLogs) {
+        const message = `Found ${droppedLogs.length} stacks of logs nearby! Collecting... 🏃`;
+        this.bot.chat(message);
+        console.log(`[Mineflayer] ${message}`);
+        for (const log of droppedLogs) {
+          await this.bot.pathfinder.goto(
+            new goals.GoalNear(log.x, log.y, log.z, 1)
+          );
+        }
+        const collectedMessage = `All logs collected! Moving into position... 🚶`;
+        this.bot.chat(collectedMessage);
+        console.log(`[Mineflayer] ${collectedMessage}`);
       }
 
       const movingMessage = `I have enough logs! Moving into position... 🚶`;
@@ -607,6 +652,12 @@ export class MineflayerService implements IService {
   private setupEventHandlers() {
     if (!this.bot) return;
 
+    this.bot.on("playerCollect", (collector, collected) => {
+      console.log("[Mineflayer] Player collected item:", {
+        collector,
+        collected,
+      });
+    });
     // Position logging
     setInterval(() => {
       if (this.bot?.entity?.position) {
@@ -682,6 +733,10 @@ export class MineflayerService implements IService {
         console.log("[Mineflayer] Difficulty already set to peaceful");
       }
       this.bot.chat("/gamerule doWeatherCycle false");
+
+      // To set a specific tick speed (e.g., 1)
+      this.bot.chat("/gamerule randomTickSpeed 1");
+
       const defaultMove = new Movements(this.bot);
       this.bot.pathfinder.setMovements(defaultMove);
       console.log("[Mineflayer] Initial setup complete");

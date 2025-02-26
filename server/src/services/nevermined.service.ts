@@ -1,10 +1,8 @@
 import {
   Payments,
   EnvironmentName,
-  FIRST_STEP_NAME,
   AgentExecutionStatus,
   Step,
-  generateStepId,
   Task,
   CreateTaskResultDto,
 } from "@nevermined-io/payments";
@@ -193,153 +191,91 @@ export class NeverminedService extends BaseService {
 
   private processQuery(payments: Payments) {
     return async (data: AnyType) => {
-      const eventData = JSON.parse(data);
-      console.log("[NeverminedService] Event data: ", eventData);
-      const step = (await payments.query.getStep(
-        eventData.step_id
-      )) as NeverminedStep;
-      console.log("[NeverminedService] Step: ", step);
-      await payments.query.logTask({
-        level: "info",
-        task_id: step.task_id,
-        message: `Processing step ${step.name}...`,
-      });
-      switch (step.name) {
-        case FIRST_STEP_NAME: {
+      try {
+        const eventData = JSON.parse(data);
+        console.log("[NeverminedService] Event data: ", eventData);
+
+        const step = (await payments.query.getStep(
+          eventData.step_id
+        )) as NeverminedStep;
+        console.log("[NeverminedService] Step: ", step);
+
+        await payments.query.logTask({
+          level: "info",
+          task_id: step.task_id,
+          message: `Processing step ${step.name}...`,
+        });
+
+        const inputQuery = step.input_query;
+        console.log("[NeverminedService] Input query: ", inputQuery);
+
+        // Check if command is a harvest command
+        const harvestMatch = inputQuery.match(/!harvest\s+(\d+)/);
+        if (!harvestMatch) {
+          console.log("[NeverminedService] Not a harvest command, returning");
           await payments.query.logTask({
-            level: "info",
+            level: "error",
             task_id: step.task_id,
-            message: `Step received ${step.name}, creating the additional steps...`,
+            message: `Command not recognized: ${inputQuery}`,
           });
-          console.log("[NeverminedService] Step received ", step);
-          const fetchDataStepId = generateStepId();
-          const encryptDataStepId = generateStepId();
-
-          const steps = [
-            {
-              step_id: fetchDataStepId,
-              task_id: step.task_id,
-              predecessor: step.step_id, // "fetchData" follows "init"
-              name: "fetchData",
-              is_last: false,
-            },
-            {
-              step_id: encryptDataStepId,
-              task_id: step.task_id,
-              predecessor: fetchDataStepId, // "encryptData" follows "fetchData"
-              name: "encryptData",
-              is_last: true,
-            },
-          ];
-          console.log("[NeverminedService] Steps to be created: ", steps);
-          const createResult = await payments.query.createSteps(
-            step.did,
-            step.task_id,
-            { steps }
-          );
-
-          await payments.query.logTask({
-            task_id: step.task_id,
-            level: createResult.success === true ? "info" : "error",
-            message:
-              createResult.success === true
-                ? "Steps created successfully."
-                : `Error creating steps: ${JSON.stringify(createResult.data)}`,
-          });
-
           await payments.query.updateStep(step.did, {
             ...step,
-            step_status: AgentExecutionStatus.Completed,
-            output: step.input_query,
-          });
-          return;
-        }
-        case "fetchData": {
-          await payments.query.logTask({
-            level: "info",
-            task_id: step.task_id,
-            step_id: step.step_id,
-            task_status: AgentExecutionStatus.In_Progress,
-            message: `Step received ${step.name}, fetching data...`,
-          });
-          const mockData = step.input_query ?? `step-1-mock-data-${Date.now()}`;
-          await payments.query.logTask({
-            level: "info",
-            task_id: step.task_id,
-            step_id: step.step_id,
-            task_status: AgentExecutionStatus.In_Progress,
-            message: `Data fetched: ${mockData}`,
-          });
-          console.log(
-            "[NeverminedService] Data fetched: ",
-            mockData,
-            step.task_id,
-            step.step_id
-          );
-          await payments.query.updateStep(step.did, {
-            ...step,
-            step_status: AgentExecutionStatus.Completed,
-            output: mockData,
-            cost: 3,
-          });
-          await payments.query.logTask({
-            level: "info",
-            task_id: step.task_id,
-            task_status: AgentExecutionStatus.In_Progress,
-            message: `Step 1 completed, data fetched`,
-          });
-          return;
-        }
-        case "encryptData": {
-          await payments.query.logTask({
-            level: "info",
-            task_id: step.task_id,
-            step_id: step.step_id,
-            task_status: AgentExecutionStatus.In_Progress,
-            message: `Step received ${step.name}, encrypting data...`,
-          });
-          console.log(
-            "[NeverminedService] Step received encrypting data...",
-            step.task_id,
-            step.step_id
-          );
-          const data = Buffer.from(step.input_query, "utf-8").toString("hex");
-          await payments.query.logTask({
-            level: "info",
-            task_id: step.task_id,
-            step_id: step.step_id,
-            task_status: AgentExecutionStatus.In_Progress,
-            message: `Data encrypted: ${data}`,
-          });
-          console.log(
-            "[NeverminedService] Data encrypted: ",
-            data,
-            step.task_id,
-            step.step_id
-          );
-          await payments.query.updateStep(step.did, {
-            ...step,
-            step_status: AgentExecutionStatus.Completed,
-            output: data,
-            cost: 2,
+            step_status: AgentExecutionStatus.Failed,
+            output: "Command not recognized",
             is_last: true,
           });
+          return;
+        }
+
+        // Extract the harvest amount
+        const harvestAmount = parseInt(harvestMatch[1], 10);
+
+        const bot = await this.mineflayerService?.getBot();
+        if (!bot || harvestAmount <= 0) {
+          console.log("[NeverminedService] Bot not found");
           await payments.query.logTask({
-            level: "info",
+            level: "error",
             task_id: step.task_id,
-            task_status: AgentExecutionStatus.Completed,
-            message: `Step 2, data fetched and encrypted`,
+            message: "Bot not found",
+          });
+          await payments.query.updateStep(step.did, {
+            ...step,
+            step_status: AgentExecutionStatus.Failed,
+            output: "Bot not found",
+            is_last: true,
           });
           return;
         }
-        default: {
-          await payments.query.logTask({
-            level: "info",
-            task_id: step.task_id,
-            message: `Unknown step ${step.name}, Skipping...`,
-          });
-          return;
-        }
+        await bot.chat(`Received request to harvest ${harvestAmount} logs`);
+        await this.mineflayerService?.harvestTree("", harvestAmount);
+        await payments.query.logTask({
+          level: "info",
+          task_id: step.task_id,
+          message: `Command executed: harvest ${harvestAmount} logs`,
+        });
+        await payments.query.updateStep(step.did, {
+          ...step,
+          step_status: AgentExecutionStatus.Completed,
+          output: `Harvested ${harvestAmount} logs`,
+          is_last: true,
+        });
+      } catch (error) {
+        console.error("[NeverminedService] Error processing query:", error);
+        const eventData = JSON.parse(data);
+        const step = (await payments.query.getStep(
+          eventData.step_id
+        )) as NeverminedStep;
+        await payments.query.logTask({
+          level: "error",
+          task_id: step.task_id,
+          message: `Error processing query: ${error}`,
+        });
+        await payments.query.updateStep(step.did, {
+          ...step,
+          step_status: AgentExecutionStatus.Failed,
+          output: `Error processing query: ${error}`,
+          is_last: true,
+        });
       }
     };
   }
