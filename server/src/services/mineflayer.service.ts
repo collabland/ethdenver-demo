@@ -348,6 +348,8 @@ export class MineflayerService implements IService {
     const neverminedService = await NeverminedService.getInstance();
     try {
       const player = this.bot.players[username];
+      const playerPos = player.entity.position.clone();
+      const buildPos = new Vec3(playerPos.x, playerPos.y, playerPos.z + 3);
       if (!player?.entity) {
         const cantSeeMessage = "I can't see you! Where are you? 👀";
         console.log(`[Mineflayer] ${cantSeeMessage}`);
@@ -444,25 +446,20 @@ export class MineflayerService implements IService {
       //collect the nearest log dropped items
       const droppedLogs = this.bot.findBlocks({
         matching: (block) => {
-          const drops = Object.values(this.bot?.entities ?? {}).filter(
-            (e) =>
-              e?.type === "object" &&
-              e?.objectType === "Item" &&
-              e?.position?.distanceTo(block.position) < 10
-          );
-          return drops.length > 0;
+          return (block.drops?.length ?? 0) > 0;
         },
-        count: requiredLogs,
+        count: totalLogs,
         maxDistance: 5,
       });
       if (droppedLogs) {
         const message = `Found ${droppedLogs.length} stacks of logs nearby! Collecting... 🏃`;
         this.bot.chat(message);
         console.log(`[Mineflayer] ${message}`);
-        for (const log of droppedLogs) {
+        for await (const log of droppedLogs) {
           await this.bot.pathfinder.goto(
-            new goals.GoalNear(log.x, log.y, log.z, 1)
+            new goals.GoalNear(log.x, log.y, log.z, 0)
           );
+          await this.bot.waitForTicks(5);
         }
         const collectedMessage = `All logs collected! Moving into position... 🚶`;
         this.bot.chat(collectedMessage);
@@ -472,8 +469,6 @@ export class MineflayerService implements IService {
       const movingMessage = `I have enough logs! Moving into position... 🚶`;
       console.log(`[Mineflayer] ${movingMessage}`);
       this.bot.chat(movingMessage);
-      const playerPos = player.entity.position.clone();
-      const buildPos = new Vec3(playerPos.x, playerPos.y, playerPos.z + 3);
 
       try {
         const goal = new goals.GoalNear(buildPos.x, buildPos.y, buildPos.z, 1);
@@ -623,6 +618,7 @@ export class MineflayerService implements IService {
         { depth: null }
       );
       this.bot.chat(completionMessage);
+      this.bot.setControlState("jump", false);
     } catch (error) {
       console.error("[Mineflayer] Error in platform building:", error);
       console.dir(error, { depth: null });
@@ -981,6 +977,9 @@ export class MineflayerService implements IService {
       return;
     }
 
+    // Store the bot's original position before moving
+    // const originalPosition = this.bot.entity.position.clone();
+
     // Move closer to player (1.5 blocks away instead of 2)
     try {
       const goal = new goals.GoalNear(
@@ -1031,6 +1030,41 @@ export class MineflayerService implements IService {
     }
 
     this.bot.chat("All logs thrown! 🎊");
+
+    // Calculate the direction vector from player to bot
+    const directionVector = this.bot.entity.position.minus(player.position);
+    // Normalize the vector
+    const length = Math.sqrt(
+      directionVector.x * directionVector.x +
+        directionVector.z * directionVector.z
+    );
+    const normalizedDirection = {
+      x: directionVector.x / length,
+      z: directionVector.z / length,
+    };
+
+    // Calculate a position 3 blocks further away from the player
+    const backPosition = new Vec3(
+      this.bot.entity.position.x + normalizedDirection.x * 3,
+      this.bot.entity.position.y,
+      this.bot.entity.position.z + normalizedDirection.z * 3
+    );
+
+    // Move back
+    this.bot.chat("Moving back...");
+    try {
+      const backGoal = new goals.GoalBlock(
+        backPosition.x,
+        backPosition.y,
+        backPosition.z
+      );
+      await this.bot.pathfinder.goto(backGoal);
+      this.bot.chat("Moved back successfully!");
+    } catch (err) {
+      console.error("[Mineflayer] Failed to move back:", err);
+      this.bot.chat("Couldn't move back, but the logs are thrown!");
+    }
+
     this.bot.chat(`LFG`);
   }
 
