@@ -373,12 +373,12 @@ export class MineflayerService implements IService {
         .items()
         .filter((item) => item.name.includes("_log"));
       const totalLogs = logs.reduce((sum, item) => sum + item.count, 0);
-
+      const nearestMerchant = await this.getNearestMerchantBot();
       if (totalLogs < requiredLogs) {
         const notEnoughMessage = `I need ${requiredLogs} logs for a ${size}x${size} platform, but only have ${totalLogs}! Trying to buy ${requiredLogs - totalLogs} logs from a nearby merchant... 🪵`;
         console.log(`[Mineflayer] ${notEnoughMessage}`);
         this.bot.chat(notEnoughMessage);
-        const nearestMerchant = await this.getNearestMerchantBot();
+
         if (!nearestMerchant) {
           console.log("[Mineflayer] No merchant bot found");
           this.bot.chat("No merchant bot found nearby, cannot build platform");
@@ -420,6 +420,7 @@ export class MineflayerService implements IService {
             );
             if (parsedData.task_status === AgentExecutionStatus.Completed) {
               this.bot?.chat(`@${nearestMerchant.username} !throw`);
+              this.bot?.chat("Waiting for logs to be dropped...");
             } else if (parsedData.task_status === AgentExecutionStatus.Failed) {
               this.bot?.chat(
                 `Error harvesting logs from @${nearestMerchant.username}, trying again...`
@@ -435,11 +436,10 @@ export class MineflayerService implements IService {
         this.bot?.chat(
           `Harvest task submitted to ${nearestMerchant.username}: Task ID: ${task?.task?.task_id}`
         );
-        return;
       }
-      this.bot.chat("Waiting for logs to be dropped...");
       // wait for the merchant to arrive
-      await this.bot.waitForTicks(1);
+      await this.bot?.awaitMessage(`<${nearestMerchant?.username}> LFG`);
+      await this.bot.waitForTicks(10);
       this.bot.chat("Collecting logs...");
       //collect the nearest log dropped items
       const droppedLogs = this.bot.findBlocks({
@@ -653,10 +653,13 @@ export class MineflayerService implements IService {
     if (!this.bot) return;
 
     this.bot.on("playerCollect", (collector, collected) => {
-      console.log("[Mineflayer] Player collected item:", {
-        collector,
-        collected,
-      });
+      if (collector.username === this.bot?.username) {
+        console.log(
+          `[Mineflayer] @${collector.username} collected item:`,
+          collected
+        );
+        console.dir(JSON.parse(JSON.stringify(collected)), { depth: null });
+      }
     });
     // Position logging
     setInterval(() => {
@@ -1028,6 +1031,7 @@ export class MineflayerService implements IService {
     }
 
     this.bot.chat("All logs thrown! 🎊");
+    this.bot.chat(`LFG`);
   }
 
   getBot() {
