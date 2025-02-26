@@ -19,7 +19,7 @@
     "@ai16z/eliza": "0.1.5-alpha.3",
     "@ai16z/plugin-bootstrap": "0.1.5-alpha.3",
     "@grammyjs/conversations": "^1.2.0",
-    "@nevermined-io/payments": "0.9.0-rc4",
+    "@nevermined-io/payments": "0.9.1",
     "@ngrok/ngrok": "^1.4.1",
     "@solana/web3.js": "^1.98.0",
     "@useorbis/db-sdk": "0.0.60-alpha",
