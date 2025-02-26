@@ -131,7 +131,7 @@ export class NeverminedService extends BaseService {
         description: `Payment plan to access the agent ${botInfo?.username ?? "<unknown>"}`,
         price: parseUnits("1", 6), //1 USDC per plan
         tokenAddress: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", //USDC on Arbitrum Sepolia
-        amountOfCredits: 100,
+        amountOfCredits: 1,
       });
 
       console.log("[NeverminedService] Payment plan created:", paymentPlan);
@@ -173,7 +173,8 @@ export class NeverminedService extends BaseService {
         name: `Agent:::${uniqueId}`,
         description: `Agent ${botInfo?.username ?? "<unknown>"}`,
         planDID: await this.getPaymentPlanDID(),
-        serviceChargeType: "dynamic",
+        serviceChargeType: "fixed",
+        amountOfCredits: 1,
         usesAIHub: true,
       });
 
@@ -343,9 +344,8 @@ export class NeverminedService extends BaseService {
     };
   }
   public async getPlanCreditBalance(
-    //FIXME: Remove after demo, should be dynamic
-    planDID = "did:nv:95933c24a7f3c181b62b2ee91d7b7e6ec0fce5430a0fd19f4cf5c4dc864efb6d"
-  ): Promise<bigint> {
+    planDID: string
+  ): Promise<{ agreementId?: string; balance: bigint }> {
     if (!this.client) {
       throw new Error("NeverminedService not started");
     }
@@ -358,16 +358,15 @@ export class NeverminedService extends BaseService {
       console.log("Subscribed, Agreement: ", agreement);
       const balance = await this.client.getPlanBalance(planDID);
       console.log(`Plan: ${planDID}\nBalance:, ${JSON.stringify(balance)}`);
-      return balance.balance;
+      return { agreementId: agreement.agreementId, balance: balance.balance };
     }
-    return balance.balance;
+    return { agreementId: undefined, balance: balance.balance };
   }
 
   public async submitTask(
-    //FIXME: Remove after demo, should be dynamic
-    agentDID = "did:nv:ed26319e8551d5578b09563c3261df7cd4e3b1f4130434d04478a036c29e4403",
-    planDID = "did:nv:95933c24a7f3c181b62b2ee91d7b7e6ec0fce5430a0fd19f4cf5c4dc864efb6d",
-    query = `hello-demo-agent-${Date.now()}`,
+    agentDID: string,
+    planDID: string,
+    query: string,
     callback?: (data: string) => Promise<void>
   ): Promise<CreateTaskResultDto | undefined> {
     if (!this.client) {
@@ -376,7 +375,7 @@ export class NeverminedService extends BaseService {
     console.log(
       `[NeverminedService] Submitting task: agentDID: ${agentDID}, planDID: ${planDID}, query: ${query}`
     );
-    const balance = await this.getPlanCreditBalance(planDID);
+    const { balance } = await this.getPlanCreditBalance(planDID);
     console.log(`Plan: ${planDID}\nBalance: ${JSON.stringify(balance)}`);
     if (balance <= BigInt(0)) {
       throw new Error("Insufficient balance");
@@ -393,14 +392,21 @@ export class NeverminedService extends BaseService {
         const parsedData = JSON.parse(data) as NeverminedTask;
         console.dir(parsedData, { depth: null });
       });
-    const { data } = await this.client.query.createTask(
+    const { success, data, error } = await this.client.query.createTask(
       agentDID,
       {
+        name: "harvest",
         input_query: query,
+        //@ts-expect-error custom input
+        query: query,
       },
       accessConfig,
       taskCallback
     );
+    if (!success) {
+      console.error("Failed to create task", error);
+      throw new Error("Failed to create task");
+    }
     console.log(`Task sent to agent: ${JSON.stringify(data)}`);
     return data;
   }

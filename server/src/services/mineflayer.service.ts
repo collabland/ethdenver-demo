@@ -4,6 +4,10 @@ import pathfinder from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
 import { plugin as collectBlock } from "mineflayer-collectblock";
 import { AnyType } from "src/utils.js";
+import { NeverminedService } from "./nevermined.service.js";
+import path from "path";
+import fs from "fs/promises";
+
 const { Movements, goals } = pathfinder;
 
 export class MineflayerService implements IService {
@@ -56,6 +60,93 @@ export class MineflayerService implements IService {
       throw error;
     }
   }
+
+  private async getNearestMerchantBot() {
+    try {
+      // Get the path to the credentials file
+      const dataDir = path.resolve(process.cwd(), "data");
+      const filePath = path.join(dataDir, "nevermined-credentials.json");
+
+      // Check if file exists
+      try {
+        await fs.access(filePath);
+      } catch (error) {
+        console.log("[Mineflayer] No credentials file found");
+        return null;
+      }
+
+      // Read and parse file
+      const fileContent = await fs.readFile(filePath, "utf8");
+      const allData = JSON.parse(fileContent);
+
+      // Find all merchant bots
+      const merchantBots = Object.entries(allData)
+        .filter(([_, data]) => (data as AnyType).role === "merchant")
+        .map(([username, data]) => ({
+          username,
+          agentDID: (data as AnyType).agentDID,
+          paymentPlanDID: (data as AnyType).paymentPlanDID,
+          role: (data as AnyType).role,
+        }));
+
+      if (merchantBots.length === 0) {
+        console.log("[Mineflayer] No merchant bots found");
+        return null;
+      }
+
+      // Check if the merchant bot is visible to the current bot
+      const visibleMerchants = merchantBots.filter(
+        (merchant) => this.bot?.players[merchant.username]?.entity !== undefined
+      );
+
+      if (visibleMerchants.length === 0) {
+        console.log("[Mineflayer] No merchant bots visible");
+        return null;
+      }
+
+      // Find the nearest merchant bot
+      const currentPosition = this.bot?.entity?.position;
+      if (!currentPosition) {
+        console.log("[Mineflayer] Current bot position unknown");
+        return visibleMerchants[0]; // Return any visible merchant if we don't know our position
+      }
+
+      // Calculate distances and find the nearest
+      const merchantsWithDistance = visibleMerchants.map((merchant) => {
+        const merchantEntity = this.bot?.players[merchant.username]?.entity;
+        const distance = merchantEntity
+          ? currentPosition.distanceTo(merchantEntity.position)
+          : Infinity;
+
+        return {
+          ...merchant,
+          distance,
+          position: merchantEntity?.position,
+        };
+      });
+
+      // Sort by distance and return the nearest
+      merchantsWithDistance.sort((a, b) => a.distance - b.distance);
+      const nearest = merchantsWithDistance[0];
+
+      console.log(
+        `[Mineflayer] Found nearest merchant bot: ${nearest.username} at distance ${nearest.distance.toFixed(2)} blocks`
+      );
+
+      // Send the come command to the merchant bot
+      if (this.bot) {
+        this.bot.chat(`@${nearest.username} !come`);
+        console.log(`[Mineflayer] Sent come command to ${nearest.username}`);
+        this.bot.chat(`I've asked ${nearest.username} to come to me`);
+      }
+
+      return nearest;
+    } catch (error) {
+      console.error("[Mineflayer] Error finding merchant bot:", error);
+      return null;
+    }
+  }
+
   // dont change this _username to username
   private async harvestTree(_username: string, amount: number) {
     if (!this.bot) return;
@@ -252,8 +343,8 @@ export class MineflayerService implements IService {
   }
 
   private async buildPlatform(username: string, size: number) {
-    if (!this.bot || size < 1) return;
-
+    if (!this.bot || size <= 1) return;
+    const neverminedService = await NeverminedService.getInstance();
     try {
       const player = this.bot.players[username];
       if (!player?.entity) {
@@ -283,9 +374,53 @@ export class MineflayerService implements IService {
       const totalLogs = logs.reduce((sum, item) => sum + item.count, 0);
 
       if (totalLogs < requiredLogs) {
-        const notEnoughMessage = `I need ${requiredLogs} logs for a ${size}x${size} platform, but only have ${totalLogs}! Try !harvest ${requiredLogs} first! 🪵`;
+        const notEnoughMessage = `I need ${requiredLogs} logs for a ${size}x${size} platform, but only have ${totalLogs}! Trying to buy ${requiredLogs - totalLogs} logs from a nearby merchant... 🪵`;
         console.log(`[Mineflayer] ${notEnoughMessage}`);
         this.bot.chat(notEnoughMessage);
+        const nearestMerchant = await this.getNearestMerchantBot();
+        if (!nearestMerchant) {
+          console.log("[Mineflayer] No merchant bot found");
+          this.bot.chat("No merchant bot found nearby, cannot build platform");
+          return;
+        }
+        const merchantDID = nearestMerchant.agentDID;
+        const merchantPaymentPlanDID = nearestMerchant.paymentPlanDID;
+        console.log(
+          "[Mineflayer] Buying logs from merchant:",
+          merchantDID,
+          merchantPaymentPlanDID
+        );
+        this.bot.chat(
+          `I've asked ${nearestMerchant.username} to buy ${requiredLogs - totalLogs} logs for me...`
+        );
+        this.bot.chat(
+          `${nearestMerchant.username} Agent DID: ${merchantDID}\n${nearestMerchant.username} Payment Plan DID: ${merchantPaymentPlanDID}`
+        );
+        const { agreementId, balance } =
+          await neverminedService.getPlanCreditBalance(merchantPaymentPlanDID);
+        if (agreementId) {
+          this.bot.chat(
+            `Credits for ${nearestMerchant.username} plan ${merchantPaymentPlanDID} purchased, agreement ID: ${agreementId}`
+          );
+        }
+        this.bot.chat(`New Plan Balance: ${balance}`);
+        const task = await neverminedService.submitTask(
+          merchantDID,
+          merchantPaymentPlanDID,
+          `!harvest ${requiredLogs - totalLogs}`,
+          async (data: string) => {
+            const parsedData = JSON.parse(data);
+            console.log("[Mineflayer] Harvest task completed:", parsedData);
+            this.bot?.chat(
+              `Harvest task completed by ${nearestMerchant.username}, result: ${parsedData}`
+            );
+            this.bot?.chat(`@${nearestMerchant.username} !throw`);
+          }
+        );
+        console.log("[Mineflayer] Harvest task submitted:", task);
+        this.bot?.chat(
+          `Harvest task submitted to ${nearestMerchant.username}: Task ID: ${task?.task?.task_id}`
+        );
         return;
       }
 
@@ -546,7 +681,7 @@ export class MineflayerService implements IService {
       } else {
         console.log("[Mineflayer] Difficulty already set to peaceful");
       }
-
+      this.bot.chat("/gamerule doWeatherCycle false");
       const defaultMove = new Movements(this.bot);
       this.bot.pathfinder.setMovements(defaultMove);
       console.log("[Mineflayer] Initial setup complete");
